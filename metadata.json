@@ -1,0 +1,7 @@
+{
+  "name": "ClaimSight",
+  "description": "AI-augmented insurance claims platform reducing processing time from days to hours.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
