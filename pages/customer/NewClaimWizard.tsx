@@ -116,6 +116,7 @@ const NewClaimWizard: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const recognitionRef = useRef<any>(null); // Use SpeechRecognition instead of MediaRecorder
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const ttsVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
 
   // Camera Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -128,6 +129,22 @@ const NewClaimWizard: React.FC = () => {
     }
   }, [messages]);
 
+  // Stop any ongoing voice activity when leaving this page/component
+  useEffect(() => {
+    return () => {
+      try {
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+      } catch (e) {
+        console.error('Error stopping recognition on unmount', e);
+      }
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
   // --- Voice Agent Logic (Frontend LLM) ---
   useEffect(() => {
     if (step === 1 && mode === 'voice') {
@@ -138,19 +155,84 @@ const NewClaimWizard: React.FC = () => {
     }
   }, [step, mode]);
 
+  // Pre-select a Chrome-optimized TTS voice (Google voices) and reuse it
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    const pickVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices || !voices.length) return;
+
+      const ua = navigator.userAgent || '';
+      const isChrome =
+        /Chrome/.test(ua) &&
+        !/Edg\//.test(ua) && // Edge
+        !/OPR\//.test(ua);   // Opera
+
+      let preferred: SpeechSynthesisVoice | undefined;
+
+      if (isChrome) {
+        // Strong preference: Google Chrome's own high-quality US English voices
+        preferred =
+          voices.find(v => v.name === 'Google US English' && v.lang === 'en-US') ||
+          voices.find(
+            v =>
+              v.lang === 'en-US' &&
+              (v.name.includes('Google') || v.voiceURI.toLowerCase().includes('google'))
+          ) ||
+          // Prefer non-local (network) voices which are often higher quality in Chrome
+          voices.find(v => v.lang === 'en-US' && (v as any).localService === false);
+      }
+
+      // Generic high-quality English fallback (avoid typical macOS system voices)
+      if (!preferred) {
+        preferred =
+          voices.find(v => v.lang === 'en-US' && !/Samantha|Zira|Hazel/i.test(v.name)) ||
+          voices.find(v => v.lang.startsWith('en'));
+      }
+
+      ttsVoiceRef.current = preferred || voices[0] || null;
+    };
+
+    // Initial attempt (may be empty the very first time)
+    pickVoice();
+
+    // Ensure we re-run once voices are actually loaded (Chrome behavior)
+    const synthesis = window.speechSynthesis;
+    const originalHandler = synthesis.onvoiceschanged;
+    synthesis.onvoiceschanged = () => {
+      pickVoice();
+      if (typeof originalHandler === 'function') {
+        originalHandler.call(synthesis);
+      }
+    };
+
+    return () => {
+      // Only clean up if we own the handler
+      if (window.speechSynthesis.onvoiceschanged === synthesis.onvoiceschanged) {
+        window.speechSynthesis.onvoiceschanged = originalHandler || null;
+      }
+    };
+  }, []);
+
   const speak = (text: string) => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel(); // Stop previous
       const utterance = new SpeechSynthesisUtterance(text);
 
-      // improved voice selection for Chrome
-      const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(v => v.name === 'Google US English') ||
-        voices.find(v => v.name === 'Samantha') || // macOS default
-        voices.find(v => v.lang === 'en-US');
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
+      // Use the pre-selected Chrome-optimized voice when available
+      if (ttsVoiceRef.current) {
+        utterance.voice = ttsVoiceRef.current;
+      } else {
+        // Fallback: try to quickly pick a reasonable voice
+        const voices = window.speechSynthesis.getVoices();
+        const fallback =
+          voices.find(v => v.name === 'Google US English' && v.lang === 'en-US') ||
+          voices.find(v => v.lang === 'en-US') ||
+          voices[0];
+        if (fallback) {
+          utterance.voice = fallback;
+        }
       }
 
       utterance.rate = 1.0; // Normal speed
@@ -402,6 +484,9 @@ const NewClaimWizard: React.FC = () => {
   const renderModeSelection = () => (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6" {...({} as any)}>
       <h2 className="text-xl font-bold text-slate-900 text-center">How would you like to file?</h2>
+      <p className="text-sm text-slate-500 text-center">
+        Voice assistant is optimized for Google Chrome and currently supports English only. Everything the assistant says will also appear as text here.
+      </p>
 
       <div
         onClick={() => setMode('voice')}
