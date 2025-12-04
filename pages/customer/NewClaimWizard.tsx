@@ -263,7 +263,7 @@ const NewClaimWizard: React.FC = () => {
 
     try {
       const completion = await openai.chat.completions.create({
-        model: 'x-ai/grok-4.1-fast:free',
+        model: 'z-ai/glm-4.5-air:free',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           ...apiMessages
